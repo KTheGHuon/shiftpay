@@ -93,6 +93,14 @@ input[type=checkbox]{width:auto}
 .ov.on{display:flex}
 .sheet{background:var(--card);width:100%;max-width:560px;border-radius:18px 18px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-height:90vh;overflow:auto}
 .sheet h3{margin:0 0 4px}
+.sub{border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px}
+.tpl3{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin:-6px 0 12px 60px;font-size:12.5px}
+.tpl3 select{width:auto;padding:5px;font-size:12.5px}
+.sec{border:1px solid var(--line);border-left:5px solid var(--c);border-radius:10px;padding:6px 10px 4px;margin-bottom:10px;background:color-mix(in srgb,var(--c) 5%,transparent)}
+.sec .sh{font-size:11.5px;font-weight:700;color:var(--c);text-transform:uppercase;letter-spacing:.5px;margin:2px 0 2px}
+.sec td{border-bottom:1px solid color-mix(in srgb,var(--c) 18%,var(--line))}
+.sec tr:last-child td{border-bottom:0}
+.sec .st td{font-weight:700;border-top:1px solid var(--c);border-bottom:0}
 .toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;pointer-events:none;z-index:30}
 .toast.on{opacity:1}
 .sync{font-size:11px;color:var(--mute)}
@@ -138,7 +146,7 @@ textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:1
       <div class="row2"><label class="f"><span>Packaged amount (pre-tax) $</span><input id="pkgFn" type="number" step="0.01" min="0" inputmode="decimal"></label>
       <label class="f"><span>&nbsp;</span><button class="btn sec" id="pkgReset" style="width:100%">Use default</button></label></div>
       <p class="note" id="pkgHint"></p></div>
-    <div class="card"><h2>Fortnight pay estimate</h2><table id="payTbl"></table></div>
+    <div class="card"><h2>Fortnight pay estimate</h2><div id="payTbl"></div></div>
     <div class="card"><h2 id="fyTitle">Financial year projection</h2><table id="fyTbl"></table><p class="note" id="fyNote"></p></div>
     <div class="card"><h2>Per shift</h2><table id="shiftTbl"></table></div>
     <div class="btns"><button class="btn sec" id="copyPay">Copy summary</button></div>
@@ -195,6 +203,16 @@ textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:1
           <option value="north">North — Launceston (Launceston Show, Recreation Day)</option>
           <option value="state">Statewide holidays only</option>
         </select></label>
+    </div>
+
+    <div class="card">
+      <h2>Roles &amp; extra allowances</h2>
+      <p class="note">Work in more than one area or grade? Add a role (e.g. "Hyperbaric G6"). Your main role is set above. Link a role or allowance to a shift code below, or pick it when editing a shift.</p>
+      <div id="roleList"></div>
+      <div class="btns" style="margin-top:4px"><button class="btn sec" id="addRole">+ Add role</button></div>
+      <div id="alList" style="margin-top:14px"></div>
+      <div class="btns" style="margin-top:4px"><button class="btn sec" id="addAl">+ Add allowance</button></div>
+      <p class="note">Allowance examples: diving/hyperbaric, remote area, uniform. Enter the amount from your payslip or agreement.</p>
     </div>
 
     <div class="card">
@@ -355,6 +373,9 @@ function calcShift(sh, st, phSet){
   if(cas>0) add("Casual loading "+Math.round(cas*1000)/10+"%",totalPaid,totalPaid*base*cas);
   if(ot>0 && sh.meal && R.allow.meal) add("Meal allowance",0,R.allow.meal);
   if(sh.charge && R.allow.charge) add("In-charge allowance",0,R.allow.charge);
+  for(const id of (sh.al||[])){ const a=(st.allows||[]).find(x=>x.id===id); if(!a) continue;
+    const nm=/allowance/i.test(a.name)?a.name:a.name+" allowance";
+    if(a.unit==="hour") add(nm,totalPaid,totalPaid*(+a.amt||0)); else add(nm,0,+a.amt||0); }
   onCall(sh,st,R,phSet,add,out);
   if(+sh.precep>0 && R.allow.precep) add("Preceptor allowance",0,(+sh.precep)*R.allow.precep);
   return out;
@@ -420,7 +441,7 @@ const DEF_TPL=[
 function defaults(){return {
   v:1, agr:"tas", cls:3, step:0, qual:0, stack:false, share:false, hideFr:{},
   custom:{rate:"",aft:12.5,night:15,d12:0,n12:15,sat:50,sun:75,ph:100,charge:0,cas:0,ocWk:0,ocWe:0},
-  anchor:"2026-11-02", otMode:"double", fte:1, phPay:true, casPct:25, pkg:0, pkgFn:{}, sup:12, help:false, region:"south",
+  anchor:"2026-11-02", otMode:"double", fte:1, phPay:true, casPct:25, roles:[], allows:[], pkg:0, pkgFn:{}, sup:12, help:false, region:"south",
   tpls:JSON.parse(JSON.stringify(DEF_TPL)),
   hols:HOLS.map(h=>({date:h[0],name:h[1],reg:h[2]})),
   shifts:{}
@@ -459,7 +480,7 @@ function showLocal(){ if(docRef) return; const el=$("sync"); if(!el) return;
 function merge(o){const d=defaults();if(!o||typeof o!=="object")return d;
   const r=Object.assign(d,o);r.custom=Object.assign(defaults().custom,o.custom||{});
   if(!Array.isArray(r.tpls)||!r.tpls.length)r.tpls=defaults().tpls;
-  if(!Array.isArray(r.hols))r.hols=defaults().hols; if(!r.shifts||typeof r.shifts!=="object")r.shifts={}; return r;}
+  if(!Array.isArray(r.hols))r.hols=defaults().hols; if(!r.shifts||typeof r.shifts!=="object")r.shifts={}; if(!Array.isArray(r.roles))r.roles=[]; if(!Array.isArray(r.allows))r.allows=[]; return r;}
 function save(){lsSet();dirty=true;clearTimeout(saveT);saveT=setTimeout(flush,700);}
 async function flush(){
   if(!docRef||saving||!dirty)return; saving=true; dirty=false; $("sync").textContent="saving…";
@@ -521,6 +542,11 @@ async function initDb(){
 function tplBy(code){return S.tpls.find(t=>t.code===code);}
 function colorOf(sh){const t=tplBy(sh.code);return (t&&t.color)||"#777";}
 
+function stFor(sh){
+  const r=sh&&sh.role&&(S.roles||[]).find(x=>x.id===sh.role); if(!r) return S;
+  return Object.assign({},S,{cls:+r.cls,step:+r.step,custom:Object.assign({},S.custom,(r.rate!==""&&r.rate!=null)?{rate:r.rate}:{})});
+}
+function roleName(id){const r=(S.roles||[]).find(x=>x.id===id);return r?(r.name||"Role"):"";}
 function workedOn(day){
   const sh=S.shifts[day]; const work=x=>x&&x.type!=="off"&&x.type!=="leave"&&x.start&&x.end;
   if(work(sh)) return true;
@@ -531,7 +557,7 @@ function workedOn(day){
 function fortnightCalc(i){
   const st=fnStart(i), set=phSet(); const lines={}; let hrs=0,gross=0,qualUsed=0; const rows=[],byDay={};
   for(let d=0;d<14;d++){const day=addDays(st,d);let sh=S.shifts[day];
-    let c=sh?calcShift(sh,S,set):null;
+    let c=sh?calcShift(sh,stFor(sh),set):null;
     // Public holiday not worked: paid 7.6 h × FTE at base (no hours worked on that date at all)
     if(set.has(day)&&S.phPay!==false&&!workedOn(day)){
       if(sh&&sh.type==="leave") c=calcShift(Object.assign({},sh,{type:"off"}),S,set); // PH replaces leave that day
@@ -577,7 +603,7 @@ function renderBrushes(){
 }
 function applyBrush(day){
   if(brush==="__clear"){delete S.shifts[day];}
-  else{const t=tplBy(brush);S.shifts[day]={date:day,code:t.code,start:t.start,end:t.end,brk:t.brk,type:t.type,paid:t.paid||0,ot:0,charge:false,precep:0,meal:false,cas:!!t.cas,
+  else{const t=tplBy(brush);S.shifts[day]={date:day,code:t.code,start:t.start,end:t.end,brk:t.brk,type:t.type,paid:t.paid||0,ot:0,charge:false,precep:0,meal:false,cas:!!t.cas,role:t.role||"",al:(t.al||[]).slice(),
     oc:!!t.oc,ocS:t.oc?((t.type==="off"||t.type==="leave"||!t.end)?"07:00":t.end):"",ocE:t.oc?"07:00":"",recall:0};}
   save();render();
 }
@@ -590,8 +616,8 @@ function renderDays(){
     dd.innerHTML="<b>"+new Date(pd(day)).toLocaleDateString("en-AU",{weekday:"short",timeZone:"UTC"})+(ph?'<span class="badge">PH</span>':"")+"</b><span>"+new Date(pd(day)).toLocaleDateString("en-AU",{day:"numeric",month:"short",timeZone:"UTC"})+"</span>";
     const s=document.createElement("div");s.className="s";
     if(!sh&&FC.byDay[day]){ const c=FC.byDay[day]; s.innerHTML='<span class="code" style="background:var(--ph)">PH</span><span class="t">'+c.hrs.toFixed(2)+'h paid (not worked)<small>'+esc(ph||"")+'</small></span><span class="amt">'+money(c.pay)+'</span>'; }
-    else if(sh){const c=FC.byDay[day]||calcShift(sh,S,set);
-      const extras=[];if(+sh.ot)extras.push("OT "+sh.ot+"h");if(sh.cas)extras.push("casual");if(sh.charge)extras.push("in charge");if(+sh.precep)extras.push("precept "+sh.precep+"h");if(sh.oc&&sh.type!=="off")extras.push("on call "+sh.ocS+"–"+sh.ocE+(+sh.recall?" (recall "+sh.recall+"h)":""));
+    else if(sh){const c=FC.byDay[day]||calcShift(sh,stFor(sh),set);
+      const extras=[];if(+sh.ot)extras.push("OT "+sh.ot+"h");if(sh.role&&roleName(sh.role))extras.push(roleName(sh.role));if(sh.cas)extras.push("casual");(sh.al||[]).forEach(id=>{const a=(S.allows||[]).find(x=>x.id===id);if(a)extras.push(a.name);});if(sh.charge)extras.push("in charge");if(+sh.precep)extras.push("precept "+sh.precep+"h");if(sh.oc&&sh.type!=="off")extras.push("on call "+sh.ocS+"–"+sh.ocE+(+sh.recall?" (recall "+sh.recall+"h)":""));
       s.innerHTML='<span class="code" style="background:'+colorOf(sh)+(sh.type==="off"?";color:#333":"")+'">'+esc(sh.code)+'</span><span class="t">'+
         (sh.type==="leave"?(sh.paid+"h paid leave"):sh.type==="off"?(sh.oc?"On call "+sh.ocS+"–"+sh.ocE+(+sh.recall?" · recall "+sh.recall+"h":""):"Off"):(sh.start+"–"+sh.end))+
         '<small>'+(ph?esc(ph)+" · ":"")+(sh.type!=="off"&&sh.type!=="leave"?c.hrs.toFixed(2)+"h":"")+(extras.length?" · "+extras.join(", "):"")+'</small></span>'+
@@ -644,18 +670,26 @@ function renderFY(){
     "Gross so far: "+money(P.ytdGross)+". Projection only — your actual tax is settled in your tax return.";
 }
 function renderPay(){
-  const f=fortnightCalc(fn);let h="";
-  const order=Object.keys(f.lines).sort((a,b)=>(a==="Ordinary hours"?-1:b==="Ordinary hours"?1:0));
-  for(const k of order){const l=f.lines[k];h+="<tr><td>"+esc(k)+(l.h?"<small>"+l.h.toFixed(2)+" h</small>":"")+'</td><td class="n">'+money(l.a)+"</td></tr>";}
-  if(!order.length)h+='<tr><td class="empty">No shifts entered this fortnight yet.</td><td></td></tr>';
-  h+='<tr class="sum"><td>Gross pay</td><td class="n">'+money(f.gross)+"</td></tr>";
-  if(f.pkg){h+="<tr><td>Salary packaging (pre-tax)</td><td class='n'>−"+money(f.pkg)+"</td></tr>";
-    h+="<tr><td><b>Taxable income</b></td><td class='n'><b>"+money(f.taxable)+"</b></td></tr>";}
-  h+="<tr><td>Est. tax + Medicare<small>ATO 2026–27 rates, annualised</small></td><td class='n'>−"+money(f.tax)+"</td></tr>";
-  if(S.help)h+="<tr><td>Est. HELP repayment</td><td class='n'>−"+money(f.help)+"</td></tr>";
-  if(f.pkg)h+="<tr><td>To bank</td><td class='n'>"+money(f.bank)+"</td></tr><tr><td>+ Salary packaging</td><td class='n'>"+money(f.pkg)+"</td></tr>";
-  h+="<tr class='net'><td>Est. take-home"+(f.pkg?"<small>bank + salary packaging</small>":"")+"</td><td class='n'>"+money(f.net)+"</td></tr>";
-  h+="<tr><td>Employer super ("+S.sup+"%)<small>approx., paid on top</small></td><td class='n'>"+money(f.sup)+"</td></tr>";
+  const f=fortnightCalc(fn);
+  const row=(k,hh,a,neg)=>"<tr><td>"+k+(hh?"<small>"+hh.toFixed(2)+" h</small>":"")+'</td><td class="n">'+(neg?"−":"")+money(a)+"</td></tr>";
+  const sec=(title,color,rows,subLbl,sub)=>rows?'<div class="sec" style="--c:'+color+'"><div class="sh">'+title+'</div><table>'+rows+(subLbl?'<tr class="st"><td>'+subLbl+'</td><td class="n">'+sub+'</td></tr>':'')+'</table></div>':"";
+  const grp={earn:[],ot:[],al:[]};
+  for(const k of Object.keys(f.lines)){ const g=/^(Overtime|Recall)/.test(k)?"ot":(/allowance/i.test(k)&&!/^Qualification/.test(k))?"al":"earn"; grp[g].push(k); }
+  grp.earn.sort((a,b)=>(a==="Ordinary hours"?-1:b==="Ordinary hours"?1:0));
+  const rs=ks=>ks.map(k=>row(esc(k),f.lines[k].h,f.lines[k].a)).join(""), tot=ks=>ks.reduce((a,k)=>a+f.lines[k].a,0);
+  let h="";
+  if(!Object.keys(f.lines).length) h='<p class="empty">No shifts entered this fortnight yet.</p>';
+  h+=sec("Earnings","#0f8a7e",rs(grp.earn),grp.earn.length>1?"Subtotal":"",money(tot(grp.earn)));
+  h+=sec("Overtime &amp; recall","#d07a12",rs(grp.ot),grp.ot.length>1?"Subtotal":"",money(tot(grp.ot)));
+  h+=sec("Allowances","#7a4fc4",rs(grp.al),grp.al.length>1?"Subtotal":"",money(tot(grp.al)));
+  h+='<div class="sec" style="--c:var(--ink)"><table><tr class="st" style="font-size:16px"><td style="border:0">Gross pay</td><td class="n" style="border:0">'+money(f.gross)+'</td></tr></table></div>';
+  let d=""; if(f.pkg) d+=row("Salary packaging (pre-tax)",0,f.pkg,1)+"<tr><td><b>Taxable income</b></td><td class='n'><b>"+money(f.taxable)+"</b></td></tr>";
+  d+=row("Est. tax + Medicare<small>ATO 2026–27 rates, annualised</small>",0,f.tax,1); if(S.help) d+=row("Est. HELP repayment",0,f.help,1);
+  h+=sec("Deductions","#c2412d",d);
+  let n=""; if(f.pkg) n+=row("To bank",0,f.bank)+row("+ Salary packaging",0,f.pkg);
+  n+="<tr class='net'><td>Est. take-home"+(f.pkg?"<small>bank + salary packaging</small>":"")+"</td><td class='n'>"+money(f.net)+"</td></tr>";
+  h+=sec("Take-home","#2a8a3e",n);
+  h+=sec("Super","#5a7d9a",row("Employer super ("+S.sup+"%)<small>approx., paid on top</small>",0,f.sup));
   $("payTbl").innerHTML=h;
   const ov=S.pkgFn&&S.pkgFn[f.st]!=null&&S.pkgFn[f.st]!=="";
   $("pkgFn").value=ov?S.pkgFn[f.st]:(+S.pkg||0);
@@ -694,9 +728,31 @@ function renderSettings(){
       const old=t.code;t[k]=v;
       if(k==="code"){for(const d in S.shifts)if(S.shifts[d].code===old)S.shifts[d].code=v;}
       save();renderSettings();renderBrushes();}));
+    let c3=null;
+    if((S.roles||[]).length||(S.allows||[]).length){ c3=document.createElement("div");c3.className="tpl3";
+      c3.innerHTML=((S.roles||[]).length?'<select data-k3="role"><option value="">Main role</option>'+S.roles.map(r=>'<option value="'+esc(r.id)+'"'+(t.role===r.id?" selected":"")+'>'+esc(r.name||"Role")+'</option>').join("")+'</select>':'')+
+        (S.allows||[]).map(al=>'<label><input type="checkbox" data-al="'+esc(al.id)+'"'+((t.al||[]).includes(al.id)?" checked":"")+'> '+esc(al.name||"Allowance")+'</label>').join("");
+      c3.querySelectorAll("[data-k3]").forEach(el=>el.onchange=()=>{t.role=el.value;save();renderSettings();});
+      c3.querySelectorAll("[data-al]").forEach(el=>el.onchange=()=>{t.al=t.al||[];if(el.checked){if(!t.al.includes(el.dataset.al))t.al.push(el.dataset.al);}else t.al=t.al.filter(x=>x!==el.dataset.al);save();}); }
     a.querySelector(".x").onclick=()=>{if(S.tpls.length<=1)return;S.tpls.splice(i,1);save();renderSettings();renderBrushes();};
-    tb.append(a,b);
+    tb.append(a,b); if(c3) tb.append(c3);
   });
+  // roles
+  const clsOpts=sel=>TAS.classes.map((c,i)=>'<option value="'+i+'"'+(+sel===i?" selected":"")+'>'+esc(c.g)+'</option>').join("");
+  const stepOpts=(ci,sel)=>(TAS.classes[ci]||TAS.classes[3]).steps.map((s,i)=>'<option value="'+i+'"'+(+sel===i?" selected":"")+'>'+s[0]+' — '+money(s[1]/TAS.divisor)+'/h</option>').join("");
+  $("roleList").innerHTML=(S.roles||[]).map((r,i)=>'<div class="sub" data-i="'+i+'"><div class="row2"><input data-rk="name" placeholder="Role name" value="'+esc(r.name||"")+'"><button class="btn dan" data-rdel="'+i+'">Remove</button></div>'+
+    (S.agr==="tas"?'<div class="row2" style="margin-top:6px"><select data-rk="cls">'+clsOpts(r.cls)+'</select><select data-rk="step">'+stepOpts(r.cls,r.step)+'</select></div>'
+      :'<input data-rk="rate" type="number" step="0.01" placeholder="Base $/h" value="'+esc(r.rate||"")+'" style="margin-top:6px">')+'</div>').join("");
+  $("roleList").querySelectorAll(".sub").forEach(div=>{const r=S.roles[+div.dataset.i];
+    div.querySelectorAll("[data-rk]").forEach(el=>el.onchange=()=>{const k=el.dataset.rk;r[k]=(k==="name")?el.value.trim():(k==="rate"?el.value:+el.value);if(k==="cls")r.step=0;save();render();});});
+  $("roleList").querySelectorAll("[data-rdel]").forEach(b=>b.onclick=()=>{const r=S.roles[+b.dataset.rdel];S.roles.splice(+b.dataset.rdel,1);
+    for(const d in S.shifts)if(S.shifts[d].role===r.id)S.shifts[d].role="";S.tpls.forEach(t=>{if(t.role===r.id)t.role="";});save();render();});
+  $("alList").innerHTML=(S.allows||[]).map((a,i)=>'<div class="sub" data-i="'+i+'"><input data-ak="name" placeholder="Allowance name" value="'+esc(a.name||"")+'">'+
+    '<div class="row3" style="margin-top:6px"><input data-ak="amt" type="number" step="0.01" placeholder="$" value="'+esc(a.amt==null?"":a.amt)+'"><select data-ak="unit"><option value="shift"'+(a.unit!=="hour"?" selected":"")+'>per shift</option><option value="hour"'+(a.unit==="hour"?" selected":"")+'>per hour</option></select><button class="btn dan" data-adel="'+i+'">Remove</button></div></div>').join("");
+  $("alList").querySelectorAll(".sub").forEach(div=>{const a=S.allows[+div.dataset.i];
+    div.querySelectorAll("[data-ak]").forEach(el=>el.onchange=()=>{const k=el.dataset.ak;a[k]=k==="amt"?(+el.value||0):el.value.trim();save();render();});});
+  $("alList").querySelectorAll("[data-adel]").forEach(b=>b.onclick=()=>{const a=S.allows[+b.dataset.adel];S.allows.splice(+b.dataset.adel,1);
+    for(const d in S.shifts)if(S.shifts[d].al)S.shifts[d].al=S.shifts[d].al.filter(x=>x!==a.id);S.tpls.forEach(t=>{if(t.al)t.al=t.al.filter(x=>x!==a.id);});save();render();});
   // holidays
   const today=todayStr();const pl=$("phList");
   const vis=S.hols.filter(h=>h.reg==="state"||h.reg===S.region||h.reg==="custom").sort((a,b)=>a.date<b.date?-1:1);
@@ -731,6 +787,8 @@ function openEditor(day){
    '<label class="f"><span>Overtime hrs (of this shift)</span><input id="eO" type="number" step="0.25" min="0" value="'+(sh.ot||0)+'"></label>'+
    '<label class="f"><span>Leave hrs paid</span><input id="eP" type="number" step="0.1" value="'+(sh.paid||0)+'"></label></div>'+
    '<div class="row2"><label class="f"><span>Preceptor hours</span><input id="ePr" type="number" step="0.5" min="0" value="'+(sh.precep||0)+'"></label><label class="f"><span>&nbsp;</span><button type="button" class="btn sec" id="eAllOT" style="width:100%">Whole shift is OT</button></label></div><p class="note">Overtime hours are counted from the <b>end</b> of the shift. E.g. E 07:30–16:00 with 30 min break = 8 h paid; enter 7 → first 1 h ordinary, last 7 h overtime.</p>'+
+   ((S.roles||[]).length?'<label class="f"><span>Role / pay grade</span><select id="eRole"><option value="">Main — '+esc(rateInfo(S).label)+'</option>'+S.roles.map(r=>'<option value="'+esc(r.id)+'"'+(r.id===sh.role?" selected":"")+'>'+esc(r.name||"Role")+'</option>').join("")+'</select></label>':'')+
+   ((S.allows||[]).length?'<div class="f"><span class="note">Extra allowances</span><br>'+S.allows.map(a=>'<label style="display:inline-block;margin:4px 12px 0 0;font-size:14px"><input type="checkbox" class="eAl" value="'+esc(a.id)+'"'+((sh.al||[]).includes(a.id)?" checked":"")+'> '+esc(a.name)+'</label>').join("")+'</div>':'')+
    '<label class="f"><span><input type="checkbox" id="eCas"'+(sh.cas?" checked":"")+'> <b>Casual shift</b> (+'+(S.casPct==null?25:S.casPct)+'% loading on all hours)</span></label>'+
    '<label class="f"><span><input type="checkbox" id="eC"'+(sh.charge?" checked":"")+'> In charge this shift</span></label>'+
    '<label class="f"><span><input type="checkbox" id="eM"'+(sh.meal?" checked":"")+'> Overtime meal allowance (OT &gt; 2h without notice)</span></label>'+
@@ -738,18 +796,18 @@ function openEditor(day){
    '<div class="row3" id="eOCbox"'+(sh.oc?"":" hidden")+'><label class="f"><span>On call from</span><input id="eOS" type="time" value="'+(sh.ocS||"")+'"></label><label class="f"><span>To</span><input id="eOE" type="time" value="'+(sh.ocE||"07:00")+'"></label><label class="f"><span>Recalled hrs</span><input id="eR" type="number" step="0.25" min="0" value="'+(sh.recall||0)+'"></label></div>'+
    '<p class="note" id="ePrev"></p>'+
    '<div class="btns"><button class="btn" id="eSave">Save</button>'+(ex?'<button class="btn dan" id="eDel">Remove</button>':"")+'<button class="btn sec" id="eX">Cancel</button></div>';
-  const read=()=>({date:day,code:$("eCode").value,start:$("eS").value,end:$("eE").value,brk:+$("eB").value||0,type:$("eT").value,ot:+$("eO").value||0,paid:+$("eP").value||0,precep:+$("ePr").value||0,charge:$("eC").checked,meal:$("eM").checked,cas:$("eCas").checked,oc:$("eOC").checked,ocS:$("eOS").value,ocE:$("eOE").value,recall:+$("eR").value||0});
-  const prev=()=>{const c=calcShift(read(),S,set);$("ePrev").textContent=c.hrs.toFixed(2)+" paid hours · "+money(c.pay)+" gross";};
+  const read=()=>({date:day,code:$("eCode").value,start:$("eS").value,end:$("eE").value,brk:+$("eB").value||0,type:$("eT").value,ot:+$("eO").value||0,paid:+$("eP").value||0,precep:+$("ePr").value||0,charge:$("eC").checked,meal:$("eM").checked,cas:$("eCas").checked,role:$("eRole")?$("eRole").value:(sh.role||""),al:[...document.querySelectorAll(".eAl:checked")].map(x=>x.value),oc:$("eOC").checked,ocS:$("eOS").value,ocE:$("eOE").value,recall:+$("eR").value||0});
+  const prev=()=>{const r0=read();const c=calcShift(r0,stFor(r0),set);$("ePrev").textContent=c.hrs.toFixed(2)+" paid hours · "+money(c.pay)+" gross";};
   const ocDefault=()=>{const ty=$("eT").value;$("eOS").value=(ty==="off"||ty==="leave"||!$("eE").value)?"07:00":$("eE").value;$("eOE").value="07:00";};
   $("eOC").onchange=()=>{$("eOCbox").hidden=!$("eOC").checked;if($("eOC").checked&&!$("eOS").value)ocDefault();prev();};
   $("eCode").onchange=()=>{const t=tplBy($("eCode").value);$("eS").value=t.start;$("eE").value=t.end;$("eB").value=t.brk||0;$("eT").value=t.type;$("eP").value=t.paid||0;
-    $("eCas").checked=!!t.cas;$("eOC").checked=!!t.oc;$("eOCbox").hidden=!t.oc;if(t.oc)ocDefault();prev();};
+    $("eCas").checked=!!t.cas;if($("eRole"))$("eRole").value=t.role||"";document.querySelectorAll(".eAl").forEach(x=>x.checked=(t.al||[]).includes(x.value));$("eOC").checked=!!t.oc;$("eOCbox").hidden=!t.oc;if(t.oc)ocDefault();prev();};
   $("eE").addEventListener("change",()=>{if($("eOC").checked)$("eOS").value=$("eE").value||$("eOS").value;});
   sht.querySelectorAll("input,select").forEach(i=>i.addEventListener("input",prev));prev();
   $("eSave").onclick=()=>{S.shifts[day]=read();save();closeEd();render();};
   if(ex)$("eDel").onclick=()=>{delete S.shifts[day];save();closeEd();render();};
   $("eX").onclick=closeEd;
-  $("eAllOT").onclick=()=>{const r=read();r.ot=0;$("eO").value=+calcShift(r,S,set).hrs.toFixed(2);prev();};
+  $("eAllOT").onclick=()=>{const r=read();r.ot=0;$("eO").value=+calcShift(r,stFor(r),set).hrs.toFixed(2);prev();};
   $("ov").classList.add("on");
 }
 function closeEd(){$("ov").classList.remove("on");}
@@ -803,6 +861,8 @@ bind("anchor",e=>{if(e.value){S.anchor=e.value;fn=curFn();}});
 bind("pkg",e=>S.pkg=+e.value||0);
 $("pkgFn").addEventListener("change",()=>{S.pkgFn=S.pkgFn||{};const v=$("pkgFn").value;S.pkgFn[fnStart(fn)]=v===""?"":Math.max(0,+v||0);save();render();});
 $("pkgReset").onclick=()=>{if(S.pkgFn)delete S.pkgFn[fnStart(fn)];save();render();};bind("sup",e=>S.sup=+e.value||0);bind("help",e=>S.help=e.checked);bind("fte",e=>S.fte=Math.max(0,+e.value||0));bind("phPay",e=>S.phPay=e.checked);bind("region",e=>S.region=e.value);
+$("addRole").onclick=()=>{S.roles.push({id:"r"+Date.now().toString(36),name:"",cls:S.cls,step:S.step,rate:""});save();render();};
+$("addAl").onclick=()=>{S.allows.push({id:"a"+Date.now().toString(36),name:"",amt:0,unit:"shift"});save();render();};
 $("addTpl").onclick=()=>{let i=1;while(tplBy("X"+i))i++;S.tpls.push({code:"X"+i,start:"08:00",end:"16:30",brk:30,type:"day",color:"#5a7d9a"});save();render();};
 $("phAdd").onclick=()=>{const d=$("phDate").value,n=$("phName").value.trim()||"Public holiday";if(!d)return;S.hols.push({date:d,name:n,reg:"custom"});$("phDate").value="";$("phName").value="";save();render();};
 $("bkCopy").onclick=async()=>{const j=JSON.stringify(S);$("bk").value=j;try{await navigator.clipboard.writeText(j);toast("Backup copied");}catch(e){toast("Backup shown below — select & copy");}};
