@@ -220,7 +220,7 @@ textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:1
 
     <div class="card">
       <h2>Backup</h2>
-      <p class="note">Your roster saves to your Claude account automatically when signed in (otherwise in this browser only). You can also copy a backup.</p>
+      <p class="note">Inside Claude your roster syncs to your account. On the web/home-screen version it's saved on this device only. <b>iPhone:</b> Safari and the home-screen app keep <i>separate</i> storage, and Private Browsing forgets everything — always add shifts from the home-screen icon, and copy a backup now and then.</p>
       <textarea id="bk" placeholder="Paste a backup here to restore"></textarea>
       <div class="btns">
         <button class="btn sec" id="bkCopy">Copy backup</button>
@@ -436,7 +436,20 @@ function curFn(){return Math.floor(diffDays(S.anchor,todayStr())/14);}
 let db=null, docRef=null, saving=false, dirty=false, saveT=null;
 const LS="shiftpay-tas-v1";
 function lsGet(){try{return JSON.parse(localStorage.getItem(LS)||"null");}catch(e){return null;}}
-function lsSet(){try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}}
+/* Device storage: localStorage + an IndexedDB mirror, newest copy wins on load */
+let localOk=true;
+function idb(){return new Promise((res,rej)=>{try{const r=indexedDB.open("shiftpay",1);r.onupgradeneeded=()=>r.result.createObjectStore("kv");r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);}catch(e){rej(e);}});}
+async function idbGet(){try{const d=await idb();return await new Promise(res=>{const q=d.transaction("kv").objectStore("kv").get(LS);q.onsuccess=()=>res(q.result?JSON.parse(q.result):null);q.onerror=()=>res(null);});}catch(e){return null;}}
+async function idbSet(json){try{const d=await idb();await new Promise((res,rej)=>{const t=d.transaction("kv","readwrite");t.objectStore("kv").put(json,LS);t.oncomplete=res;t.onerror=()=>rej(t.error);});return true;}catch(e){return false;}}
+function lsSet(){
+  S.savedAt=Date.now(); const json=JSON.stringify(S); let ok=false;
+  try{localStorage.setItem(LS,json);ok=localStorage.getItem(LS)===json;}catch(e){ok=false;}
+  idbSet(json).then(ok2=>{localOk=ok||ok2;showLocal();});
+  localOk=ok; showLocal();
+}
+function showLocal(){ if(docRef) return; const el=$("sync"); if(!el) return;
+  el.textContent=localOk?"saved on this device ✓":"⚠ not saving — see Settings";
+  el.style.color=localOk?"":"var(--warn)"; }
 function merge(o){const d=defaults();if(!o||typeof o!=="object")return d;
   const r=Object.assign(d,o);r.custom=Object.assign(defaults().custom,o.custom||{});
   if(!Array.isArray(r.tpls)||!r.tpls.length)r.tpls=defaults().tpls;
@@ -737,7 +750,15 @@ let resetArm=false;$("reset").onclick=()=>{if(!resetArm){resetArm=true;$("reset"
   S=defaults();save();render();toast("Reset");resetArm=false;$("reset").textContent="Reset all";};
 
 /* ===== Boot ===== */
-S=merge(lsGet());fn=curFn();render();initDb();
+S=merge(lsGet());fn=curFn();render();
+(async()=>{ const a=lsGet(), b=await idbGet();
+  const pick=(b&&(!a||(+b.savedAt||0)>(+a.savedAt||0)))?b:a;
+  if(pick&&pick!==a){ S=merge(pick); try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){} render(); }
+  showLocal();
+  try{ if(navigator.storage&&navigator.storage.persist) navigator.storage.persist(); }catch(e){}
+})();
+window.addEventListener("pagehide",()=>{try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}});
+initDb();
 </script>
 </body>
 </html>
