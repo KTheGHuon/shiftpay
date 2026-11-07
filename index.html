@@ -55,7 +55,7 @@ main{padding:12px 14px 120px;max-width:720px;margin:0 auto}
 .frc i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;vertical-align:1px}
 .frc small{color:var(--mute)}
 .code{border-radius:8px;padding:3px 8px;font-weight:700;color:#fff;font-size:13px;min-width:40px;text-align:center}
-.s .t{font-size:13px}
+.s .t{font-size:13px;flex:1;min-width:0}
 .s .t small{display:block;color:var(--mute);font-size:12px}
 .s .amt{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:600;font-size:13px}
 .day .e{border:0;background:transparent;width:40px;cursor:pointer;color:var(--mute);font-size:16px}
@@ -84,7 +84,8 @@ input[type=checkbox]{width:auto}
 .tpl{display:grid;grid-template-columns:54px 1fr 1fr 58px 34px;gap:6px;align-items:center;margin-bottom:6px}
 .tpl input,.tpl select{padding:7px 6px;font-size:13px}
 .tpl .x{border:0;background:transparent;color:var(--warn);font-size:18px;cursor:pointer}
-.tpl2{display:grid;grid-template-columns:1fr 70px 46px;gap:6px;margin:-2px 0 12px 60px}
+.tpl2{display:grid;grid-template-columns:1fr 62px 40px 64px;gap:6px;margin:-2px 0 12px 60px;align-items:center}
+.tpl2 label{font-size:12.5px;white-space:nowrap}
 .tpl2 select,.tpl2 input{padding:6px;font-size:12.5px}
 .ph{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .ph button{border:0;background:transparent;color:var(--warn);cursor:pointer;font-size:16px}
@@ -166,6 +167,8 @@ textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:1
           <label class="f"><span>Sunday %</span><input id="cSun" type="number" step="0.25"></label>
           <label class="f"><span>Public hol %</span><input id="cPh" type="number" step="0.25"></label>
           <label class="f"><span>In-charge $/shift</span><input id="cCharge" type="number" step="0.01"></label>
+          <label class="f"><span>On-call $/h weekday</span><input id="cOcWk" type="number" step="0.01"></label>
+          <label class="f"><span>On-call $/h wkend/PH</span><input id="cOcWe" type="number" step="0.01"></label>
           <label class="f"><span>Casual loading %</span><input id="cCas" type="number" step="0.5"></label>
         </div>
         <p class="note">Defaults are Nurses Award 2020 penalty percentages (afternoon 12.5%, night 15%, Sat 50%, Sun 75%, PH 100%). Check your own enterprise agreement — private hospitals (e.g. Healthscope, Calvary) and aged care often differ.</p>
@@ -262,7 +265,7 @@ const TAS = {
     {g:"Grade 9 (DON)", exempt:true, steps:[["Level 1",182734],["Level 2",192563],["Level 3",204381]]}
   ],
   pen: {aft:15, night:27.5, d12:16.75, n12:21.75, sat:50, sun:75, ph:150},
-  allow: {charge:29.02, precep:3.40, meal:8.78}
+  allow: {charge:29.02, precep:3.40, meal:8.78, ocWk:5.97, ocWkMin:47.68, ocWe:7.69, ocWeMin:61.35}
 };
 
 const HOLS = [
@@ -296,7 +299,7 @@ function rateInfo(st){
     const c=st.custom;
     const base=(+c.rate||0);
     return {hourly:base, qual:(+st.qual||0), casual:(+c.cas||0), pen:{aft:+c.aft||0,night:+c.night||0,d12:+c.d12||0,n12:+c.n12||0,sat:+c.sat||0,sun:+c.sun||0,ph:+c.ph||0},
-      allow:{charge:+c.charge||0,precep:0,meal:0}, exempt:false, label:"Custom rate"};
+      allow:{charge:+c.charge||0,precep:0,meal:0,ocWk:+c.ocWk||0,ocWkMin:(+c.ocWk||0)*8,ocWe:+c.ocWe||0,ocWeMin:(+c.ocWe||0)*8}, exempt:false, label:"Custom rate"};
   }
   const cl=TAS.classes[st.cls]||TAS.classes[3]; const sp=cl.steps[st.step]||cl.steps[0];
   const hourly=sp[1]/TAS.divisor;
@@ -307,7 +310,8 @@ function rateInfo(st){
 function calcShift(sh, st, phSet){
   const R=rateInfo(st); const base=R.hourly; const out={hrs:0,pay:0,lines:{}};
   const add=(k,h,amt)=>{const l=out.lines[k]||(out.lines[k]={h:0,a:0});l.h+=h;l.a+=amt;out.pay+=amt;};
-  if(!sh||sh.type==="off") return out;
+  if(!sh) return out;
+  if(sh.type==="off"){ onCall(sh,st,R,phSet,add,out); return out; }
   const qk=R.qual?"Qualification allowance "+R.qual+"%":null;
   if(sh.type==="leave"){const h=+sh.paid||0;add("Leave ("+sh.code+")",h,h*base);if(qk)add(qk,h,h*base*R.qual/100);out.hrs+=h;return out;}
   const s=hm(sh.start); let e=hm(sh.end); if(e<=s) e+=1440;
@@ -322,7 +326,8 @@ function calcShift(sh, st, phSet){
   let ordLeft=totalPaid-ot, otDone=0;
   const otMode=st.otMode||"double";
   for(const [a,b,day] of segs){
-    const segH=(b-a)*frac/60; const w=dow(day); const ph=phSet.has(day);
+    // A shift that STARTS on Sunday is paid Sunday rates for the whole shift (except hours on a public holiday)
+    const segH=(b-a)*frac/60; const w=dow(sh.date)===0?0:dow(day); const ph=phSet.has(day);
     const h=Math.min(segH,ordLeft); ordLeft-=h; const oth=segH-h;
     out.hrs+=segH;
     if(oth>0){
@@ -345,8 +350,31 @@ function calcShift(sh, st, phSet){
   }
   if(ot>0 && sh.meal && R.allow.meal) add("Meal allowance",0,R.allow.meal);
   if(sh.charge && R.allow.charge) add("In-charge allowance",0,R.allow.charge);
+  onCall(sh,st,R,phSet,add,out);
   if(+sh.precep>0 && R.allow.precep) add("Preceptor allowance",0,(+sh.precep)*R.allow.precep);
   return out;
+}
+
+/* On-call (availability) after/around a shift, plus recall hours paid at overtime rates */
+function onCall(sh,st,R,phSet,add,out){
+  if(!sh.oc||!sh.ocS||!sh.ocE) return;
+  let os=hm(sh.ocS); const crosses=sh.type!=="off"&&sh.type!=="leave"&&sh.start&&sh.end&&hm(sh.end)<=hm(sh.start);
+  if(crosses && os<hm(sh.start)) os+=1440;
+  let oe=hm(sh.ocE); while(oe<=os) oe+=1440;
+  const A=R.allow; let amt=0,hrs=0;
+  const isWe=d=>{const w=dow(d);return w===0||w===6||phSet.has(d);};
+  for(let k=Math.floor(os/1440);k*1440<oe;k++){
+    const a=Math.max(os,k*1440),b=Math.min(oe,(k+1)*1440); if(b<=a) continue;
+    const d=addDays(sh.date,k),hh=(b-a)/60; hrs+=hh; amt+=hh*(isWe(d)?A.ocWe:A.ocWk);
+  }
+  const d0=addDays(sh.date,Math.floor(os/1440)); const min=isWe(d0)?A.ocWeMin:A.ocWkMin;
+  if(amt>0||min>0) add("On-call allowance ("+hrs.toFixed(1)+" h)",0,Math.max(amt,min||0));
+  const rc=+sh.recall||0;
+  if(rc>0){ const base=R.hourly, w=dow(d0);
+    if(phSet.has(d0)) add("Recall ×2.5 (public hol)",rc,rc*base*2.5);
+    else if((st.otMode||"double")==="double"||w===0) add("Recall ×2",rc,rc*base*2);
+    else { const a1=Math.min(rc,2),b1=rc-a1; add("Recall ×1.5 (first 2h)",a1,a1*base*1.5); if(b1>0) add("Recall ×2",b1,b1*base*2); }
+    out.hrs+=rc; }
 }
 
 /* ATO 2026-27 resident rates (Stage 3, 15% bracket from 1 Jul 2026) + LITO + Medicare 2% */
@@ -378,13 +406,14 @@ const DEF_TPL=[
   {code:"N",start:"21:00",end:"07:30",brk:30,type:"night",color:"#3c3fa8"},
   {code:"D12",start:"07:00",end:"19:30",brk:30,type:"d12",color:"#1d7a8c"},
   {code:"N12",start:"19:00",end:"07:30",brk:30,type:"n12",color:"#6a2fa0"},
+  {code:"EOC",start:"07:30",end:"16:00",brk:30,type:"day",oc:true,color:"#1f5f7a"},
   {code:"AL",start:"",end:"",brk:0,type:"leave",paid:7.6,color:"#8a8f98"},
   {code:"SL",start:"",end:"",brk:0,type:"leave",paid:7.6,color:"#b05050"},
   {code:"OFF",start:"",end:"",brk:0,type:"off",color:"#c9c6bf"}
 ];
 function defaults(){return {
   v:1, agr:"tas", cls:3, step:0, qual:0, stack:false, share:false, hideFr:{},
-  custom:{rate:"",aft:12.5,night:15,d12:0,n12:15,sat:50,sun:75,ph:100,charge:0,cas:0},
+  custom:{rate:"",aft:12.5,night:15,d12:0,n12:15,sat:50,sun:75,ph:100,charge:0,cas:0,ocWk:0,ocWe:0},
   anchor:"2026-11-02", otMode:"double", pkg:0, pkgFn:{}, sup:12, help:false, region:"south",
   tpls:JSON.parse(JSON.stringify(DEF_TPL)),
   hols:HOLS.map(h=>({date:h[0],name:h[1],reg:h[2]})),
@@ -426,7 +455,7 @@ let myId=null, userCap=null, canWrite=true, lastShared=null, FR={}, names={};
 function sharedPayload(){
   const from=addDays(todayStr(),-35), to=addDays(todayStr(),150), out={};
   for(const d in S.shifts){ if(d<from||d>to) continue; const s=S.shifts[d];
-    out[d]=[String(s.code||"").slice(0,6), s.type==="leave"||s.type==="off"?"":s.start, s.type==="leave"||s.type==="off"?"":s.end, (tplBy(s.code)||{}).color||"#777", s.type]; }
+    out[d]=[String(s.code||"").slice(0,6)+(s.oc&&!/OC$/.test(s.code)?"+OC":""), s.type==="leave"||s.type==="off"?"":s.start, s.type==="leave"||s.type==="off"?"":s.end, (tplBy(s.code)||{}).color||"#777", s.type]; }
   return out;
 }
 async function publishRoster(){
@@ -512,7 +541,8 @@ function renderBrushes(){
 }
 function applyBrush(day){
   if(brush==="__clear"){delete S.shifts[day];}
-  else{const t=tplBy(brush);S.shifts[day]={date:day,code:t.code,start:t.start,end:t.end,brk:t.brk,type:t.type,paid:t.paid||0,ot:0,charge:false,precep:0,meal:false};}
+  else{const t=tplBy(brush);S.shifts[day]={date:day,code:t.code,start:t.start,end:t.end,brk:t.brk,type:t.type,paid:t.paid||0,ot:0,charge:false,precep:0,meal:false,
+    oc:!!t.oc,ocS:t.oc?((t.type==="off"||t.type==="leave"||!t.end)?"07:00":t.end):"",ocE:t.oc?"07:00":"",recall:0};}
   save();render();
 }
 function renderDays(){
@@ -524,9 +554,9 @@ function renderDays(){
     dd.innerHTML="<b>"+new Date(pd(day)).toLocaleDateString("en-AU",{weekday:"short",timeZone:"UTC"})+(ph?'<span class="badge">PH</span>':"")+"</b><span>"+new Date(pd(day)).toLocaleDateString("en-AU",{day:"numeric",month:"short",timeZone:"UTC"})+"</span>";
     const s=document.createElement("div");s.className="s";
     if(sh){const c=FC.byDay[day]||calcShift(sh,S,set);
-      const extras=[];if(+sh.ot)extras.push("OT "+sh.ot+"h");if(sh.charge)extras.push("in charge");if(+sh.precep)extras.push("precept "+sh.precep+"h");
+      const extras=[];if(+sh.ot)extras.push("OT "+sh.ot+"h");if(sh.charge)extras.push("in charge");if(+sh.precep)extras.push("precept "+sh.precep+"h");if(sh.oc&&sh.type!=="off")extras.push("on call "+sh.ocS+"–"+sh.ocE+(+sh.recall?" (recall "+sh.recall+"h)":""));
       s.innerHTML='<span class="code" style="background:'+colorOf(sh)+(sh.type==="off"?";color:#333":"")+'">'+esc(sh.code)+'</span><span class="t">'+
-        (sh.type==="leave"?(sh.paid+"h paid leave"):sh.type==="off"?"Off":(sh.start+"–"+sh.end))+
+        (sh.type==="leave"?(sh.paid+"h paid leave"):sh.type==="off"?(sh.oc?"On call "+sh.ocS+"–"+sh.ocE+(+sh.recall?" · recall "+sh.recall+"h":""):"Off"):(sh.start+"–"+sh.end))+
         '<small>'+(ph?esc(ph)+" · ":"")+(sh.type!=="off"&&sh.type!=="leave"?c.hrs.toFixed(2)+"h":"")+(extras.length?" · "+extras.join(", "):"")+'</small></span>'+
         (c.pay?'<span class="amt">'+money(c.pay)+'</span>':"");
     } else s.innerHTML='<span class="empty">'+(ph?esc(ph):"—")+'</span>';
@@ -572,7 +602,7 @@ function renderSettings(){
   $("agr").value=S.agr;$("tasSet").hidden=S.agr!=="tas";$("custSet").hidden=S.agr!=="custom";
   const cls=$("cls");cls.innerHTML=TAS.classes.map((c,i)=>'<option value="'+i+'">'+esc(c.g)+"</option>").join("");cls.value=S.cls;
   const cl=TAS.classes[S.cls];$("step").innerHTML=cl.steps.map((s,i)=>'<option value="'+i+'">'+s[0]+" — "+money(s[1]).replace(".00","")+" p.a. ("+money(s[1]/TAS.divisor)+"/h)</option>").join("");$("step").value=S.step;
-  const c=S.custom;$("cRate").value=c.rate;$("cAft").value=c.aft;$("cNight").value=c.night;$("cD12").value=c.d12;$("cN12").value=c.n12;$("cSat").value=c.sat;$("cSun").value=c.sun;$("cPh").value=c.ph;$("cCharge").value=c.charge;$("cCas").value=c.cas;
+  const c=S.custom;$("cRate").value=c.rate;$("cAft").value=c.aft;$("cNight").value=c.night;$("cD12").value=c.d12;$("cN12").value=c.n12;$("cSat").value=c.sat;$("cSun").value=c.sun;$("cPh").value=c.ph;$("cCharge").value=c.charge;$("cOcWk").value=c.ocWk||0;$("cOcWe").value=c.ocWe||0;$("cCas").value=c.cas;
   $("qual").value=S.qual;$("stack").checked=!!S.stack;$("share").checked=!!S.share;
   const ids=Object.keys(FR);
   $("frList").innerHTML=ids.length?ids.map(id=>'<label class="f"><span><input type="checkbox" data-fr="'+esc(id)+'"'+(S.hideFr[id]?"":" checked")+'> Show '+esc(frName(id))+'\'s roster</span></label>').join(""):"";
@@ -586,9 +616,10 @@ function renderSettings(){
     const b=document.createElement("div");b.className="tpl2";
     b.innerHTML='<select data-k="type">'+Object.keys(TYPES).map(k=>'<option value="'+k+'"'+(k===t.type?" selected":"")+">"+TYPES[k]+"</option>").join("")+'</select>'+
       (t.type==="leave"?'<input type="number" step="0.1" value="'+(t.paid||0)+'" data-k="paid" aria-label="Paid hours" title="Paid hours">':'<input type="number" step="5" value="'+(t.brk||0)+'" data-k="brk" aria-label="Unpaid break minutes" title="Unpaid break (min)">')+
-      '<span class="note" style="align-self:center">'+(t.type==="leave"?"hrs":"min brk")+'</span>';
+      '<span class="note" style="align-self:center">'+(t.type==="leave"?"hrs":"min brk")+'</span>'+
+      '<label><input type="checkbox" data-k="oc"'+(t.oc?" checked":"")+'> +on call</label>';
     [a,b].forEach(el=>el.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=()=>{
-      const k=inp.dataset.k;let v=inp.value;if(k==="brk"||k==="paid")v=+v||0;if(k==="code")v=v.trim().toUpperCase()||t.code;
+      const k=inp.dataset.k;let v=k==="oc"?inp.checked:inp.value;if(k==="brk"||k==="paid")v=+v||0;if(k==="code")v=v.trim().toUpperCase()||t.code;
       const old=t.code;t[k]=v;
       if(k==="code"){for(const d in S.shifts)if(S.shifts[d].code===old)S.shifts[d].code=v;}
       save();renderSettings();renderBrushes();}));
@@ -602,8 +633,8 @@ function renderSettings(){
   pl.querySelectorAll("button").forEach(b=>b.onclick=()=>{S.hols=S.hols.filter(h=>!(h.date===b.dataset.d&&h.name===b.dataset.n));save();render();});
   $("srcNote").innerHTML=
    "<b>THS public rates:</b> salary rates effective "+TAS.salaryEff+" under the "+esc(TAS.name)+" (still applying past its 30 Jun 2026 nominal expiry while a new agreement is bargained). Hourly = annual ÷ 52.167 ÷ 38.<br>"+
-   "<b>Penalties (THS):</b> afternoon 15%, night 27.5%, 12h day 16.75%, 12h night 21.75%, Saturday 50%, Sunday 75%, public holiday 150% (2.5×). Grade 8/9 don't get shift penalties. Weekend/PH hours are split at midnight, so a Friday night shift gets Saturday rates after 00:00.<br>"+
-   "<b>Allowances (from 1 Jul 2026):</b> in-charge $29.02/shift, preceptor $3.40/h, overtime meal $8.78.<br>"+
+   "<b>Penalties (THS):</b> afternoon 15%, night 27.5%, 12h day 16.75%, 12h night 21.75%, Saturday 50%, Sunday 75%, public holiday 150% (2.5×). Grade 8/9 don't get shift penalties. Weekend/PH hours are split at midnight (a Friday night shift gets Saturday rates after 00:00), except a shift that starts on Sunday gets the Sunday rate for the whole shift. Public holiday hours are always split at midnight.<br>"+
+   "<b>Allowances (from 1 Jul 2026):</b> in-charge $29.02/shift, preceptor $3.40/h, overtime meal $8.78. On call (availability): $5.97/h Mon–Fri (min $47.68), $7.69/h Sat/Sun/PH (min $61.35); recalled hours are paid at overtime rates.<br>"+
    "<b>Overtime:</b> the overtime hours you enter are the last paid hours of that shift. Default 2× (switchable to 1.5× first 2 h); PH 2.5×. Overtime hours get the OT rate instead of shift/weekend penalties.<br>"+
    "<b>Unpaid breaks</b> are spread evenly across the shift's hours.<br>"+
    "When the new agreement is finalised, switch to <i>custom rates</i> or ask Claude to update the pay table. Check with ANMF Tas / HACSU or Payroll if something looks off.";
@@ -629,11 +660,17 @@ function openEditor(day){
    '<div class="row2"><label class="f"><span>Preceptor hours</span><input id="ePr" type="number" step="0.5" min="0" value="'+(sh.precep||0)+'"></label><label class="f"><span>&nbsp;</span><button type="button" class="btn sec" id="eAllOT" style="width:100%">Whole shift is OT</button></label></div><p class="note">Overtime hours are counted from the <b>end</b> of the shift. E.g. E 07:30–16:00 with 30 min break = 8 h paid; enter 7 → first 1 h ordinary, last 7 h overtime.</p>'+
    '<label class="f"><span><input type="checkbox" id="eC"'+(sh.charge?" checked":"")+'> In charge this shift</span></label>'+
    '<label class="f"><span><input type="checkbox" id="eM"'+(sh.meal?" checked":"")+'> Overtime meal allowance (OT &gt; 2h without notice)</span></label>'+
+   '<label class="f"><span><input type="checkbox" id="eOC"'+(sh.oc?" checked":"")+'> <b>On call</b> (after this shift, or on a day off)</span></label>'+
+   '<div class="row3" id="eOCbox"'+(sh.oc?"":" hidden")+'><label class="f"><span>On call from</span><input id="eOS" type="time" value="'+(sh.ocS||"")+'"></label><label class="f"><span>To</span><input id="eOE" type="time" value="'+(sh.ocE||"07:00")+'"></label><label class="f"><span>Recalled hrs</span><input id="eR" type="number" step="0.25" min="0" value="'+(sh.recall||0)+'"></label></div>'+
    '<p class="note" id="ePrev"></p>'+
    '<div class="btns"><button class="btn" id="eSave">Save</button>'+(ex?'<button class="btn dan" id="eDel">Remove</button>':"")+'<button class="btn sec" id="eX">Cancel</button></div>';
-  const read=()=>({date:day,code:$("eCode").value,start:$("eS").value,end:$("eE").value,brk:+$("eB").value||0,type:$("eT").value,ot:+$("eO").value||0,paid:+$("eP").value||0,precep:+$("ePr").value||0,charge:$("eC").checked,meal:$("eM").checked});
+  const read=()=>({date:day,code:$("eCode").value,start:$("eS").value,end:$("eE").value,brk:+$("eB").value||0,type:$("eT").value,ot:+$("eO").value||0,paid:+$("eP").value||0,precep:+$("ePr").value||0,charge:$("eC").checked,meal:$("eM").checked,oc:$("eOC").checked,ocS:$("eOS").value,ocE:$("eOE").value,recall:+$("eR").value||0});
   const prev=()=>{const c=calcShift(read(),S,set);$("ePrev").textContent=c.hrs.toFixed(2)+" paid hours · "+money(c.pay)+" gross";};
-  $("eCode").onchange=()=>{const t=tplBy($("eCode").value);$("eS").value=t.start;$("eE").value=t.end;$("eB").value=t.brk||0;$("eT").value=t.type;$("eP").value=t.paid||0;prev();};
+  const ocDefault=()=>{const ty=$("eT").value;$("eOS").value=(ty==="off"||ty==="leave"||!$("eE").value)?"07:00":$("eE").value;$("eOE").value="07:00";};
+  $("eOC").onchange=()=>{$("eOCbox").hidden=!$("eOC").checked;if($("eOC").checked&&!$("eOS").value)ocDefault();prev();};
+  $("eCode").onchange=()=>{const t=tplBy($("eCode").value);$("eS").value=t.start;$("eE").value=t.end;$("eB").value=t.brk||0;$("eT").value=t.type;$("eP").value=t.paid||0;
+    $("eOC").checked=!!t.oc;$("eOCbox").hidden=!t.oc;if(t.oc)ocDefault();prev();};
+  $("eE").addEventListener("change",()=>{if($("eOC").checked)$("eOS").value=$("eE").value||$("eOS").value;});
   sht.querySelectorAll("input,select").forEach(i=>i.addEventListener("input",prev));prev();
   $("eSave").onclick=()=>{S.shifts[day]=read();save();closeEd();render();};
   if(ex)$("eDel").onclick=()=>{delete S.shifts[day];save();closeEd();render();};
@@ -648,13 +685,18 @@ $("ov").addEventListener("click",e=>{if(e.target.id==="ov")closeEd();});
 function buildIcs(){
   const st=fnStart(fn);const L=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//ShiftPay Tas//EN","CALSCALE:GREGORIAN","X-WR-TIMEZONE:Australia/Hobart"];
   const stamp=new Date().toISOString().replace(/[-:]/g,"").slice(0,15)+"Z";
-  for(let d=0;d<14;d++){const day=addDays(st,d),sh=S.shifts[day];if(!sh||sh.type==="off")continue;
+  for(let d=0;d<14;d++){const day=addDays(st,d),sh=S.shifts[day];if(!sh||(sh.type==="off"&&!sh.oc))continue;
     const D=day.replace(/-/g,"");
+    if(sh.type!=="off"){
     L.push("BEGIN:VEVENT","UID:shiftpay-"+D+"@tas","DTSTAMP:"+stamp);
     if(sh.type==="leave"){L.push("DTSTART;VALUE=DATE:"+D,"DTEND;VALUE=DATE:"+addDays(day,1).replace(/-/g,""),"SUMMARY:"+sh.code+" (leave)");}
     else{const s=sh.start.replace(":",""),e=sh.end.replace(":","");const endDay=hm(sh.end)<=hm(sh.start)?addDays(day,1):day;
       L.push("DTSTART;TZID=Australia/Hobart:"+D+"T"+s+"00","DTEND;TZID=Australia/Hobart:"+endDay.replace(/-/g,"")+"T"+e+"00","SUMMARY:"+sh.code+" shift "+sh.start+"–"+sh.end);}
     L.push("END:VEVENT");}
+    if(sh.oc&&sh.ocS&&sh.ocE){ let os=hm(sh.ocS); if(sh.type!=="off"&&sh.type!=="leave"&&sh.start&&hm(sh.end)<=hm(sh.start)&&os<hm(sh.start)) os+=1440;
+      let oe=hm(sh.ocE); while(oe<=os) oe+=1440; const sd=addDays(day,Math.floor(os/1440)), ed=addDays(day,Math.floor(oe/1440));
+      L.push("BEGIN:VEVENT","UID:shiftpay-oc-"+D+"@tas","DTSTAMP:"+stamp,"DTSTART;TZID=Australia/Hobart:"+sd.replace(/-/g,"")+"T"+sh.ocS.replace(":","")+"00","DTEND;TZID=Australia/Hobart:"+ed.replace(/-/g,"")+"T"+sh.ocE.replace(":","")+"00","SUMMARY:On call","END:VEVENT"); }
+  }
   L.push("END:VCALENDAR");return L.join("\r\n");
 }
 async function exportIcs(){
@@ -681,7 +723,7 @@ $("copyPay").onclick=async()=>{const f=fortnightCalc(fn);let t="Pay fortnight "+
 const bind=(id,fnc)=>$(id).addEventListener("change",()=>{fnc($(id));save();render();});
 bind("agr",e=>S.agr=e.value);
 bind("cls",e=>{S.cls=+e.value;S.step=0;});bind("step",e=>S.step=+e.value);
-["cRate:rate","cAft:aft","cNight:night","cD12:d12","cN12:n12","cSat:sat","cSun:sun","cPh:ph","cCharge:charge","cCas:cas"].forEach(p=>{const [id,k]=p.split(":");bind(id,e=>S.custom[k]=e.value===""?"":+e.value);});
+["cRate:rate","cAft:aft","cNight:night","cD12:d12","cN12:n12","cSat:sat","cSun:sun","cPh:ph","cCharge:charge","cCas:cas","cOcWk:ocWk","cOcWe:ocWe"].forEach(p=>{const [id,k]=p.split(":");bind(id,e=>S.custom[k]=e.value===""?"":+e.value);});
 bind("qual",e=>S.qual=+e.value||0);bind("stack",e=>S.stack=e.checked);bind("share",e=>S.share=e.checked);bind("otMode",e=>S.otMode=e.value);
 bind("anchor",e=>{if(e.value){S.anchor=e.value;fn=curFn();}});
 bind("pkg",e=>S.pkg=+e.value||0);
