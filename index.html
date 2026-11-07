@@ -232,22 +232,19 @@ textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:1
     </div>
 
     <div class="card">
-      <h2>Share roster with friends</h2>
-      <label class="f"><span><input type="checkbox" id="share"> Share my roster (shift codes &amp; times only)</span></label>
-      <p class="note">Friends see your shifts beside theirs. Your pay, grade, overtime, allowances and packaging stay private: they're kept in your own space, which nobody else can read — not even the page owner.</p>
-      <div id="frList"></div>
-      <p class="note" id="frNote"></p>
-    </div>
-
-    <div class="card">
       <h2>Backup</h2>
-      <p class="note">Inside Claude your roster syncs to your account. On the web/home-screen version it's saved on this device only. <b>iPhone:</b> Safari and the home-screen app keep <i>separate</i> storage, and Private Browsing forgets everything — always add shifts from the home-screen icon, and copy a backup now and then.</p>
-      <textarea id="bk" placeholder="Paste a backup here to restore"></textarea>
+      <p class="note">Your roster is saved on this device. Save a backup file to <b>Google Drive, iCloud Drive or Files</b> now and then — use it to restore, or to move to a new phone.</p>
       <div class="btns">
-        <button class="btn sec" id="bkCopy">Copy backup</button>
-        <button class="btn sec" id="bkLoad">Restore from pasted</button>
-        <button class="btn dan" id="reset">Reset all</button>
+        <button class="btn" id="bkSave">Save backup file</button>
+        <button class="btn sec" id="bkOpen">Restore from file</button>
+        <input type="file" id="bkFile" accept=".json,application/json,text/plain" hidden>
       </div>
+      <p class="note" id="bkInfo"></p>
+      <details style="margin-top:6px"><summary class="note">Copy / paste instead</summary>
+        <textarea id="bk" placeholder="Paste a backup here to restore"></textarea>
+        <div class="btns"><button class="btn sec" id="bkCopy">Copy backup</button><button class="btn sec" id="bkLoad">Restore from pasted</button></div>
+      </details>
+      <div class="btns"><button class="btn dan" id="reset">Reset all</button></div>
     </div>
 
     <div class="card">
@@ -439,7 +436,7 @@ const DEF_TPL=[
   {code:"OFF",start:"",end:"",brk:0,type:"off",color:"#c9c6bf"}
 ];
 function defaults(){return {
-  v:1, agr:"tas", cls:3, step:0, qual:0, stack:false, share:false, hideFr:{},
+  v:1, agr:"tas", cls:3, step:0, qual:0, stack:false, 
   custom:{rate:"",aft:12.5,night:15,d12:0,n12:15,sat:50,sun:75,ph:100,charge:0,cas:0,ocWk:0,ocWe:0},
   anchor:"2026-11-02", otMode:"double", fte:1, phPay:true, casPct:25, roles:[], allows:[], pkg:0, pkgFn:{}, sup:12, help:false, region:"south",
   tpls:JSON.parse(JSON.stringify(DEF_TPL)),
@@ -488,52 +485,19 @@ async function flush(){
   catch(e){$("sync").textContent="saved on device";
     if(e&&(e.code==="invalid_argument"||e.code==="revoked"||e.code==="not_granted")){docRef=null;canWrite=false;}else dirty=true;}
   saving=false; if(dirty) saveT=setTimeout(flush,1500);
-  publishRoster();
 }
-/* ===== Friend sharing: only codes & times go to the shared space ===== */
-let myId=null, userCap=null, canWrite=true, lastShared=null, FR={}, names={};
-function sharedPayload(){
-  const from=addDays(todayStr(),-35), to=addDays(todayStr(),150), out={};
-  for(const d in S.shifts){ if(d<from||d>to) continue; const s=S.shifts[d];
-    out[d]=[String(s.code||"").slice(0,6)+(s.oc&&!/OC$/.test(s.code)?"+OC":""), s.type==="leave"||s.type==="off"?"":s.start, s.type==="leave"||s.type==="off"?"":s.end, (tplBy(s.code)||{}).color||"#777", s.type]; }
-  return out;
-}
-async function publishRoster(){
-  if(!db||!myId||!canWrite) return;
-  const ref=db.doc("rosters/"+myId);
-  try{
-    if(!S.share){ if(lastShared!=="__off"){ await ref.delete(); lastShared="__off"; } return; }
-    const body=JSON.stringify(sharedPayload()); if(body===lastShared) return;
-    await ref.set({shifts:JSON.parse(body), at:Date.now()}); lastShared=body;
-  }catch(e){ if(e&&e.code==="invalid_argument"){ canWrite=false; renderSettings&&tab==="settings"&&renderSettings(); } }
-}
-function watchFriends(){
-  let timer=setTimeout(()=>{$("frNote")&&($("frNote").textContent="Can't reach shared rosters yet.");},10000);
-  db.collection("rosters").onSnapshot(snap=>{
-    clearTimeout(timer); const next={};
-    for(const d of snap.docs){ if(d.id===myId||!d.exists) continue; const v=d.data()||{}; if(v.shifts&&typeof v.shifts==="object") next[d.id]=v.shifts; }
-    FR=next; resolveNames();
-  },()=>{clearTimeout(timer);});
-}
-async function resolveNames(){
-  const ids=Object.keys(FR);
-  if(userCap&&ids.length&&userCap.profiles){ try{const ps=await userCap.profiles(ids); for(const id of ids) names[id]=(ps&&ps[id]&&ps[id].name)||""; }catch(e){} }
-  render();
-}
-function frName(id){return names[id]||"Friend";}
+let myId=null, canWrite=true;
 async function initDb(){
   try{
     const dbn=await (window.claude&&claude.use?claude.use("db"):null);
     const user=await (window.claude&&claude.use?claude.use("user"):null);
     if(!dbn||!user) return;
     const id=await user.id(); if(!id) return;
-    db=dbn; myId=id; userCap=user; docRef=db.collection("data/users/"+id).doc("shiftpay");
-    try{ const cw=user.can?await user.can("data.write"):null; }catch(e){}
-    watchFriends();
+    db=dbn; myId=id; docRef=db.collection("data/users/"+id).doc("shiftpay");
     let done=false; const timer=setTimeout(()=>{if(!done){$("sync").textContent="saved on device";}},10000);
     const snap=await docRef.get(); done=true; clearTimeout(timer);
     const data=snap&&(typeof snap.data==="function"?snap.data():snap);
-    if(data&&data.json){ S=merge(JSON.parse(data.json)); lsSet(); render(); $("sync").textContent="synced ✓"; publishRoster(); }
+    if(data&&data.json){ S=merge(JSON.parse(data.json)); lsSet(); render(); $("sync").textContent="synced ✓"; }
     else { $("sync").textContent="synced ✓"; dirty=true; flush(); }
   }catch(e){ $("sync").textContent="saved on device"; }
 }
@@ -626,10 +590,6 @@ function renderDays(){
     const tap=()=>{if(brush)applyBrush(day);else openEditor(day);};
     dd.onclick=tap;s.onclick=tap;
     const e=document.createElement("button");e.className="e";e.textContent="✎";e.setAttribute("aria-label","Edit "+day);e.onclick=()=>openEditor(day);
-    const fr=Object.keys(FR).filter(id=>!S.hideFr[id]&&FR[id][day]);
-    if(fr.length){ const f=document.createElement("div"); f.className="fr";
-      f.innerHTML=fr.map(id=>{const x=FR[id][day];return '<span class="frc"><i style="background:'+esc(/^#[0-9a-fA-F]{3,8}$/.test(x[3])?x[3]:"#777")+'"></i>'+esc(frName(id).split(" ")[0])+' '+esc(x[0])+(x[1]?' <small>'+esc(x[1])+'–'+esc(x[2])+'</small>':'')+'</span>';}).join("");
-      s.appendChild(f); }
     r.append(dd,s,e);box.appendChild(r);
   }
 }
@@ -707,11 +667,8 @@ function renderSettings(){
   const cls=$("cls");cls.innerHTML=TAS.classes.map((c,i)=>'<option value="'+i+'">'+esc(c.g)+"</option>").join("");cls.value=S.cls;
   const cl=TAS.classes[S.cls];$("step").innerHTML=cl.steps.map((s,i)=>'<option value="'+i+'">'+s[0]+" — "+money(s[1]).replace(".00","")+" p.a. ("+money(s[1]/TAS.divisor)+"/h)</option>").join("");$("step").value=S.step;
   const c=S.custom;$("cRate").value=c.rate;$("cAft").value=c.aft;$("cNight").value=c.night;$("cD12").value=c.d12;$("cN12").value=c.n12;$("cSat").value=c.sat;$("cSun").value=c.sun;$("cPh").value=c.ph;$("cCharge").value=c.charge;$("cOcWk").value=c.ocWk||0;$("cOcWe").value=c.ocWe||0;$("casPct").value=S.casPct==null?25:S.casPct;
-  $("qual").value=S.qual;$("stack").checked=!!S.stack;$("share").checked=!!S.share;
-  const ids=Object.keys(FR);
-  $("frList").innerHTML=ids.length?ids.map(id=>'<label class="f"><span><input type="checkbox" data-fr="'+esc(id)+'"'+(S.hideFr[id]?"":" checked")+'> Show '+esc(frName(id))+'\'s roster</span></label>').join(""):"";
-  $("frList").querySelectorAll("[data-fr]").forEach(c=>c.onchange=()=>{if(c.checked)delete S.hideFr[c.dataset.fr];else S.hideFr[c.dataset.fr]=true;save();render();});
-  $("frNote").textContent=!db?"Sign in to Claude to share rosters.":!canWrite?"You can view friends' rosters but can't save here — ask the owner to invite you by email as an Editor.":ids.length?"":"No friends sharing yet. The owner invites friends by email from this page's Share menu (as Editor, so they can save their own roster).";$("otMode").value=S.otMode||"double";$("anchor").value=S.anchor;$("pkg").value=S.pkg;$("sup").value=S.sup;$("help").checked=!!S.help;$("fte").value=S.fte==null?1:S.fte;$("phPay").checked=S.phPay!==false;$("region").value=S.region;
+  $("qual").value=S.qual;$("stack").checked=!!S.stack;
+  $("otMode").value=S.otMode||"double";$("anchor").value=S.anchor;$("pkg").value=S.pkg;$("sup").value=S.sup;$("help").checked=!!S.help;$("fte").value=S.fte==null?1:S.fte;$("phPay").checked=S.phPay!==false;$("region").value=S.region;
   // templates
   const tb=$("tpls");tb.innerHTML="";
   S.tpls.forEach((t,i)=>{
@@ -737,6 +694,7 @@ function renderSettings(){
     a.querySelector(".x").onclick=()=>{if(S.tpls.length<=1)return;S.tpls.splice(i,1);save();renderSettings();renderBrushes();};
     tb.append(a,b); if(c3) tb.append(c3);
   });
+  bkInfo();
   // roles
   const clsOpts=sel=>TAS.classes.map((c,i)=>'<option value="'+i+'"'+(+sel===i?" selected":"")+'>'+esc(c.g)+'</option>').join("");
   const stepOpts=(ci,sel)=>(TAS.classes[ci]||TAS.classes[3]).steps.map((s,i)=>'<option value="'+i+'"'+(+sel===i?" selected":"")+'>'+s[0]+' — '+money(s[1]/TAS.divisor)+'/h</option>').join("");
@@ -856,7 +814,7 @@ const bind=(id,fnc)=>$(id).addEventListener("change",()=>{fnc($(id));save();rend
 bind("agr",e=>S.agr=e.value);
 bind("cls",e=>{S.cls=+e.value;S.step=0;});bind("step",e=>S.step=+e.value);
 ["cRate:rate","cAft:aft","cNight:night","cD12:d12","cN12:n12","cSat:sat","cSun:sun","cPh:ph","cCharge:charge","cOcWk:ocWk","cOcWe:ocWe"].forEach(p=>{const [id,k]=p.split(":");bind(id,e=>S.custom[k]=e.value===""?"":+e.value);});
-bind("qual",e=>S.qual=+e.value||0);bind("casPct",e=>S.casPct=e.value===""?25:Math.max(0,+e.value));bind("stack",e=>S.stack=e.checked);bind("share",e=>S.share=e.checked);bind("otMode",e=>S.otMode=e.value);
+bind("qual",e=>S.qual=+e.value||0);bind("casPct",e=>S.casPct=e.value===""?25:Math.max(0,+e.value));bind("stack",e=>S.stack=e.checked);bind("otMode",e=>S.otMode=e.value);
 bind("anchor",e=>{if(e.value){S.anchor=e.value;fn=curFn();}});
 bind("pkg",e=>S.pkg=+e.value||0);
 $("pkgFn").addEventListener("change",()=>{S.pkgFn=S.pkgFn||{};const v=$("pkgFn").value;S.pkgFn[fnStart(fn)]=v===""?"":Math.max(0,+v||0);save();render();});
@@ -865,6 +823,24 @@ $("addRole").onclick=()=>{S.roles.push({id:"r"+Date.now().toString(36),name:"",c
 $("addAl").onclick=()=>{S.allows.push({id:"a"+Date.now().toString(36),name:"",amt:0,unit:"shift"});save();render();};
 $("addTpl").onclick=()=>{let i=1;while(tplBy("X"+i))i++;S.tpls.push({code:"X"+i,start:"08:00",end:"16:30",brk:30,type:"day",color:"#5a7d9a"});save();render();};
 $("phAdd").onclick=()=>{const d=$("phDate").value,n=$("phName").value.trim()||"Public holiday";if(!d)return;S.hols.push({date:d,name:n,reg:"custom"});$("phDate").value="";$("phName").value="";save();render();};
+/* ===== Backup files (Google Drive / iCloud / Files via the share sheet) ===== */
+function bkInfo(){ const el=$("bkInfo"); if(!el) return; if(!S.lastBackup){el.textContent="No backup file saved yet.";return;}
+  const d=Math.floor((Date.now()-S.lastBackup)/864e5); el.textContent="Last backup file: "+(d<=0?"today":d===1?"yesterday":d+" days ago")+"."; }
+async function saveBackupFile(){
+  S.lastBackup=Date.now(); const json=JSON.stringify(S); const name="shiftpay-backup-"+todayStr()+".json";
+  try{ for(const type of ["application/json","text/plain"]){ const f=new File([json],name,{type});
+      if(navigator.canShare&&navigator.canShare({files:[f]})){ await navigator.share({files:[f],title:"ShiftPay backup"}); save(); bkInfo(); toast("Backup ready to save"); return; } } }
+  catch(e){ if(e&&e.name==="AbortError"){ S.lastBackup=S._prevBk||0; return; } }
+  try{ const dl=await (window.claude&&claude.use?claude.use("downloads"):null); if(dl){ await dl.save({filename:name,data:json}); save(); bkInfo(); return; } }catch(e){}
+  try{ const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([json],{type:"application/json"})); a.download=name; document.body.appendChild(a); a.click(); a.remove(); save(); bkInfo(); toast("Backup downloaded"); }
+  catch(e){ toast("Couldn't save here — use Copy backup"); }
+}
+$("bkSave").onclick=()=>{S._prevBk=S.lastBackup;saveBackupFile();};
+$("bkOpen").onclick=()=>$("bkFile").click();
+$("bkFile").onchange=async()=>{ const f=$("bkFile").files[0]; if(!f) return;
+  try{ const o=JSON.parse(await f.text()); if(!o||typeof o!=="object"||!o.shifts) throw 0;
+    S=merge(o); save(); render(); toast("Restored "+Object.keys(S.shifts).length+" shifts"); }catch(e){ toast("That file isn't a ShiftPay backup"); }
+  $("bkFile").value=""; };
 $("bkCopy").onclick=async()=>{const j=JSON.stringify(S);$("bk").value=j;try{await navigator.clipboard.writeText(j);toast("Backup copied");}catch(e){toast("Backup shown below — select & copy");}};
 $("bkLoad").onclick=()=>{try{const o=JSON.parse($("bk").value);S=merge(o);save();render();toast("Restored");}catch(e){toast("That backup isn't valid");}};
 let resetArm=false;$("reset").onclick=()=>{if(!resetArm){resetArm=true;$("reset").textContent="Tap again to erase everything";setTimeout(()=>{resetArm=false;$("reset").textContent="Reset all";},3000);return;}
