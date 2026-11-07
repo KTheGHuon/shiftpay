@@ -187,6 +187,8 @@ textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:1
         <label class="f"><span>Superannuation %</span><input id="sup" type="number" step="0.5"></label>
       </div>
       <label class="f"><span><input type="checkbox" id="help"> I have a HELP / HECS debt</span></label>
+      <div class="row2"><label class="f"><span>FTE (e.g. 1.0, 0.8)</span><input id="fte" type="number" step="0.05" min="0" max="1.5" inputmode="decimal"></label>
+      <label class="f"><span>&nbsp;</span><span style="font-size:13px"><input type="checkbox" id="phPay"> Pay public holidays not worked (7.6 h × FTE)</span></label></div>
       <label class="f"><span>Region (for regional public holidays)</span>
         <select id="region">
           <option value="south">South — Hobart (Regatta, Hobart Show)</option>
@@ -415,7 +417,7 @@ const DEF_TPL=[
 function defaults(){return {
   v:1, agr:"tas", cls:3, step:0, qual:0, stack:false, share:false, hideFr:{},
   custom:{rate:"",aft:12.5,night:15,d12:0,n12:15,sat:50,sun:75,ph:100,charge:0,cas:0,ocWk:0,ocWe:0},
-  anchor:"2026-11-02", otMode:"double", pkg:0, pkgFn:{}, sup:12, help:false, region:"south",
+  anchor:"2026-11-02", otMode:"double", fte:1, phPay:true, pkg:0, pkgFn:{}, sup:12, help:false, region:"south",
   tpls:JSON.parse(JSON.stringify(DEF_TPL)),
   hols:HOLS.map(h=>({date:h[0],name:h[1],reg:h[2]})),
   shifts:{}
@@ -516,10 +518,27 @@ async function initDb(){
 function tplBy(code){return S.tpls.find(t=>t.code===code);}
 function colorOf(sh){const t=tplBy(sh.code);return (t&&t.color)||"#777";}
 
+function workedOn(day){
+  const sh=S.shifts[day]; const work=x=>x&&x.type!=="off"&&x.type!=="leave"&&x.start&&x.end;
+  if(work(sh)) return true;
+  const pv=S.shifts[addDays(day,-1)]; if(work(pv)&&hm(pv.end)<=hm(pv.start)&&hm(pv.end)>0) return true;
+  if(sh&&+sh.recall>0) return true;
+  return false;
+}
 function fortnightCalc(i){
   const st=fnStart(i), set=phSet(); const lines={}; let hrs=0,gross=0,qualUsed=0; const rows=[],byDay={};
-  for(let d=0;d<14;d++){const day=addDays(st,d);const sh=S.shifts[day];if(!sh)continue;
-    const c=calcShift(sh,S,set);
+  for(let d=0;d<14;d++){const day=addDays(st,d);let sh=S.shifts[day];
+    let c=sh?calcShift(sh,S,set):null;
+    // Public holiday not worked: paid 7.6 h × FTE at base (no hours worked on that date at all)
+    if(set.has(day)&&S.phPay!==false&&!workedOn(day)){
+      if(sh&&sh.type==="leave") c=calcShift(Object.assign({},sh,{type:"off"}),S,set); // PH replaces leave that day
+      if(!c) c={hrs:0,pay:0,lines:{}};
+      const R0=rateInfo(S), ph=7.6*(+S.fte||1);
+      const L=(k,hh,a)=>{const l=c.lines[k]||(c.lines[k]={h:0,a:0});l.h+=hh;l.a+=a;c.pay+=a;};
+      L("Public holiday not worked",ph,ph*R0.hourly); if(R0.qual) L("Qualification allowance "+R0.qual+"%",ph,ph*R0.hourly*R0.qual/100);
+      c.hrs+=ph; if(!sh) sh={code:"PH",type:"leave",date:day,_ph:true};
+    }
+    if(!c) continue;
     // qualification allowance: ordinary hours only, capped at the first 76 h of the fortnight
     for(const k in c.lines){ if(/^Qualification/.test(k)){ const l=c.lines[k]; const ok=Math.max(0,Math.min(l.h,76-qualUsed));
         if(ok<l.h){ const cut=l.h?l.a*(l.h-ok)/l.h:0; l.a-=cut; c.pay-=cut; l.h=ok; } qualUsed+=ok; if(!l.h) delete c.lines[k]; } }
@@ -567,7 +586,8 @@ function renderDays(){
     const dd=document.createElement("div");dd.className="d";
     dd.innerHTML="<b>"+new Date(pd(day)).toLocaleDateString("en-AU",{weekday:"short",timeZone:"UTC"})+(ph?'<span class="badge">PH</span>':"")+"</b><span>"+new Date(pd(day)).toLocaleDateString("en-AU",{day:"numeric",month:"short",timeZone:"UTC"})+"</span>";
     const s=document.createElement("div");s.className="s";
-    if(sh){const c=FC.byDay[day]||calcShift(sh,S,set);
+    if(!sh&&FC.byDay[day]){ const c=FC.byDay[day]; s.innerHTML='<span class="code" style="background:var(--ph)">PH</span><span class="t">'+c.hrs.toFixed(2)+'h paid (not worked)<small>'+esc(ph||"")+'</small></span><span class="amt">'+money(c.pay)+'</span>'; }
+    else if(sh){const c=FC.byDay[day]||calcShift(sh,S,set);
       const extras=[];if(+sh.ot)extras.push("OT "+sh.ot+"h");if(sh.charge)extras.push("in charge");if(+sh.precep)extras.push("precept "+sh.precep+"h");if(sh.oc&&sh.type!=="off")extras.push("on call "+sh.ocS+"–"+sh.ocE+(+sh.recall?" (recall "+sh.recall+"h)":""));
       s.innerHTML='<span class="code" style="background:'+colorOf(sh)+(sh.type==="off"?";color:#333":"")+'">'+esc(sh.code)+'</span><span class="t">'+
         (sh.type==="leave"?(sh.paid+"h paid leave"):sh.type==="off"?(sh.oc?"On call "+sh.ocS+"–"+sh.ocE+(+sh.recall?" · recall "+sh.recall+"h":""):"Off"):(sh.start+"–"+sh.end))+
@@ -638,7 +658,7 @@ function renderPay(){
   $("pkgFn").value=ov?S.pkgFn[f.st]:(+S.pkg||0);
   $("pkgHint").textContent=(ov?"Custom amount for this fortnight. ":"Using your default ("+money(+S.pkg||0)+"). ")+"Packaging comes off your gross before tax, so tax is worked out on taxable income."+(f.pkgSet>f.gross?" Capped at this fortnight's gross.":"");
   let s="";
-  for(const [day,sh,c] of f.rows){s+="<tr><td>"+fmtD(day)+" · <b>"+esc(sh.code)+"</b><small>"+(sh.type==="leave"?"Leave":sh.type==="off"?"Off":sh.start+"–"+sh.end+" · "+c.hrs.toFixed(2)+" h")+"</small></td><td class='n'>"+money(c.pay)+"</td></tr>";}
+  for(const [day,sh,c] of f.rows){s+="<tr><td>"+fmtD(day)+" · <b>"+esc(sh.code)+"</b><small>"+(sh._ph?"Public holiday (not worked)":sh.type==="leave"?"Leave":sh.type==="off"?"Off":sh.start+"–"+sh.end+" · "+c.hrs.toFixed(2)+" h")+"</small></td><td class='n'>"+money(c.pay)+"</td></tr>";}
   $("shiftTbl").innerHTML=s||'<tr><td class="empty">Nothing yet.</td></tr>';
   renderFY();
   $("payNote").innerHTML="Base rate "+money(f.R.hourly)+"/hr"+(f.R.annual?" ("+money(f.R.annual).replace(".00","")+" p.a. ÷ 52.167 ÷ 38)":"")+
@@ -654,7 +674,7 @@ function renderSettings(){
   const ids=Object.keys(FR);
   $("frList").innerHTML=ids.length?ids.map(id=>'<label class="f"><span><input type="checkbox" data-fr="'+esc(id)+'"'+(S.hideFr[id]?"":" checked")+'> Show '+esc(frName(id))+'\'s roster</span></label>').join(""):"";
   $("frList").querySelectorAll("[data-fr]").forEach(c=>c.onchange=()=>{if(c.checked)delete S.hideFr[c.dataset.fr];else S.hideFr[c.dataset.fr]=true;save();render();});
-  $("frNote").textContent=!db?"Sign in to Claude to share rosters.":!canWrite?"You can view friends' rosters but can't save here — ask the owner to invite you by email as an Editor.":ids.length?"":"No friends sharing yet. The owner invites friends by email from this page's Share menu (as Editor, so they can save their own roster).";$("otMode").value=S.otMode||"double";$("anchor").value=S.anchor;$("pkg").value=S.pkg;$("sup").value=S.sup;$("help").checked=!!S.help;$("region").value=S.region;
+  $("frNote").textContent=!db?"Sign in to Claude to share rosters.":!canWrite?"You can view friends' rosters but can't save here — ask the owner to invite you by email as an Editor.":ids.length?"":"No friends sharing yet. The owner invites friends by email from this page's Share menu (as Editor, so they can save their own roster).";$("otMode").value=S.otMode||"double";$("anchor").value=S.anchor;$("pkg").value=S.pkg;$("sup").value=S.sup;$("help").checked=!!S.help;$("fte").value=S.fte==null?1:S.fte;$("phPay").checked=S.phPay!==false;$("region").value=S.region;
   // templates
   const tb=$("tpls");tb.innerHTML="";
   S.tpls.forEach((t,i)=>{
@@ -684,6 +704,7 @@ function renderSettings(){
    "<b>Allowances (from 1 Jul 2026):</b> in-charge $29.02/shift, preceptor $3.40/h, overtime meal $8.78. On call (availability): $5.97/h Mon–Fri (min $47.68), $7.69/h Sat/Sun/PH (min $61.35); recalled hours are paid at overtime rates.<br>"+
    "<b>Overtime:</b> the overtime hours you enter are the last paid hours of that shift. Default 2× (switchable to 1.5× first 2 h); PH 2.5×. Overtime hours get the OT rate instead of shift/weekend penalties.<br>"+
    "<b>Unpaid breaks</b> are spread evenly across the shift's hours.<br>"+
+   "<b>Public holidays not worked:</b> if you have no hours on that date (including the morning end of a night shift), you're paid 7.6 h × FTE at base rate; this replaces any leave entered that day.<br>"+
    "When the new agreement is finalised, switch to <i>custom rates</i> or ask Claude to update the pay table. Check with ANMF Tas / HACSU or Payroll if something looks off.";
 }
 
@@ -775,7 +796,7 @@ bind("qual",e=>S.qual=+e.value||0);bind("stack",e=>S.stack=e.checked);bind("shar
 bind("anchor",e=>{if(e.value){S.anchor=e.value;fn=curFn();}});
 bind("pkg",e=>S.pkg=+e.value||0);
 $("pkgFn").addEventListener("change",()=>{S.pkgFn=S.pkgFn||{};const v=$("pkgFn").value;S.pkgFn[fnStart(fn)]=v===""?"":Math.max(0,+v||0);save();render();});
-$("pkgReset").onclick=()=>{if(S.pkgFn)delete S.pkgFn[fnStart(fn)];save();render();};bind("sup",e=>S.sup=+e.value||0);bind("help",e=>S.help=e.checked);bind("region",e=>S.region=e.value);
+$("pkgReset").onclick=()=>{if(S.pkgFn)delete S.pkgFn[fnStart(fn)];save();render();};bind("sup",e=>S.sup=+e.value||0);bind("help",e=>S.help=e.checked);bind("fte",e=>S.fte=Math.max(0,+e.value||0));bind("phPay",e=>S.phPay=e.checked);bind("region",e=>S.region=e.value);
 $("addTpl").onclick=()=>{let i=1;while(tplBy("X"+i))i++;S.tpls.push({code:"X"+i,start:"08:00",end:"16:30",brk:30,type:"day",color:"#5a7d9a"});save();render();};
 $("phAdd").onclick=()=>{const d=$("phDate").value,n=$("phName").value.trim()||"Public holiday";if(!d)return;S.hols.push({date:d,name:n,reg:"custom"});$("phDate").value="";$("phName").value="";save();render();};
 $("bkCopy").onclick=async()=>{const j=JSON.stringify(S);$("bk").value=j;try{await navigator.clipboard.writeText(j);toast("Backup copied");}catch(e){toast("Backup shown below — select & copy");}};
