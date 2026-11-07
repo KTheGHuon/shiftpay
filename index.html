@@ -139,6 +139,7 @@ textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:1
       <label class="f"><span>&nbsp;</span><button class="btn sec" id="pkgReset" style="width:100%">Use default</button></label></div>
       <p class="note" id="pkgHint"></p></div>
     <div class="card"><h2>Fortnight pay estimate</h2><table id="payTbl"></table></div>
+    <div class="card"><h2 id="fyTitle">Financial year projection</h2><table id="fyTbl"></table><p class="note" id="fyNote"></p></div>
     <div class="card"><h2>Per shift</h2><table id="shiftTbl"></table></div>
     <div class="btns"><button class="btn sec" id="copyPay">Copy summary</button></div>
     <p class="note" id="payNote"></p>
@@ -587,6 +588,38 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","
 
 function renderTotals(){const f=fortnightCalc(fn);$("tHrs").textContent=f.hrs.toFixed(1);$("tGross").textContent=money(f.gross);$("tNet").textContent=money(f.net);return f;}
 
+/* Financial-year projection: average of fortnights worked so far × 26 */
+function fyProjection(){
+  const ref=addDays(fnStart(fn),13); const y=+ref.slice(0,4), m=+ref.slice(5,7);
+  const fy0=(m>=7?y:y-1); const fyS=fy0+"-07-01", fyE=(fy0+1)+"-06-30";
+  const today=todayStr(); const upto=today<fyE?today:fyE;
+  const first=Math.floor(diffDays(S.anchor,fyS)/14)-1, last=Math.floor(diffDays(S.anchor,fyE)/14)+1;
+  const used=[]; let curInc=false;
+  for(let i=first;i<=last;i++){ const en=addDays(fnStart(i),13); if(en<fyS||en>fyE) continue;
+    if(en<=upto){ const f=fortnightCalc(i); if(f.gross>0) used.push(f); } }
+  if(!used.length){ const f=fortnightCalc(fn); if(f.gross>0){ used.push(f); curInc=true; } }
+  const n=used.length, avg=k=>used.reduce((a,f)=>a+f[k],0)/(n||1);
+  const gross=avg("gross")*26, pkg=avg("pkg")*26, taxable=gross-pkg, sup=avg("sup")*26;
+  const tax=annualTax(taxable), med=medicare(taxable), help=S.help?helpRate(taxable):0;
+  return {fy0,n,curInc,avgGross:avg("gross"),gross,pkg,taxable,tax,med,help,net:taxable-tax-med-help+pkg,sup,
+    ytdGross:used.reduce((a,f)=>a+f.gross,0)};
+}
+function renderFY(){
+  const P=fyProjection(); const lbl="FY "+P.fy0+"–"+String(P.fy0+1).slice(2);
+  $("fyTitle").textContent=lbl+" projection";
+  if(!P.n){ $("fyTbl").innerHTML='<tr><td class="empty">No completed fortnights with shifts in this financial year yet.</td></tr>'; $("fyNote").textContent=""; return; }
+  const r=(a,b,c)=>"<tr"+(c?" class='"+c+"'":"")+"><td>"+a+"</td><td class='n'>"+b+"</td></tr>";
+  let t=r("Average gross per fortnight<small>from "+P.n+" fortnight"+(P.n>1?"s":"")+" worked</small>",money(P.avgGross))+
+    r("Projected gross (× 26)",money(P.gross),"sum");
+  if(P.pkg) t+=r("Salary packaging",("−"+money(P.pkg)))+r("<b>Projected taxable income</b>","<b>"+money(P.taxable)+"</b>");
+  t+=r("Income tax<small>after low income tax offset</small>","−"+money(P.tax))+r("Medicare levy (2%)","−"+money(P.med));
+  if(S.help) t+=r("HELP repayment","−"+money(P.help));
+  t+=r("Projected take-home"+(P.pkg?"<small>incl. salary packaging</small>":""),money(P.net),"net")+
+    r("Employer super",money(P.sup))+r("Effective tax rate",(P.taxable?((P.tax+P.med+P.help)/P.taxable*100).toFixed(1):"0")+"%");
+  $("fyTbl").innerHTML=t;
+  $("fyNote").textContent=(P.curInc?"Based on the current fortnight only (no completed fortnights yet). ":"Uses completed fortnights up to today that have shifts entered; empty fortnights are skipped. ")+
+    "Gross so far: "+money(P.ytdGross)+". Projection only — your actual tax is settled in your tax return.";
+}
 function renderPay(){
   const f=fortnightCalc(fn);let h="";
   const order=Object.keys(f.lines).sort((a,b)=>(a==="Ordinary hours"?-1:b==="Ordinary hours"?1:0));
@@ -607,6 +640,7 @@ function renderPay(){
   let s="";
   for(const [day,sh,c] of f.rows){s+="<tr><td>"+fmtD(day)+" · <b>"+esc(sh.code)+"</b><small>"+(sh.type==="leave"?"Leave":sh.type==="off"?"Off":sh.start+"–"+sh.end+" · "+c.hrs.toFixed(2)+" h")+"</small></td><td class='n'>"+money(c.pay)+"</td></tr>";}
   $("shiftTbl").innerHTML=s||'<tr><td class="empty">Nothing yet.</td></tr>';
+  renderFY();
   $("payNote").innerHTML="Base rate "+money(f.R.hourly)+"/hr"+(f.R.annual?" ("+money(f.R.annual).replace(".00","")+" p.a. ÷ 52.167 ÷ 38)":"")+
     ". Estimate only — compare with your payslip. Tax is estimated by annualising this fortnight (tax-free threshold claimed); ATO withholding tables may differ by a few dollars. Annual leave loading, higher duties and back-pay are not included.";
 }
